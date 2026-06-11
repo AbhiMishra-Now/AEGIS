@@ -33,8 +33,11 @@ Thumbs.db
 # Backend confidential files
 backend/.env
 backend/.env.local
-backend/__pycache__/
-backend/*.pyc
+backend/gcp-service-account.json
+gcp-service-account.json
+backend/state.json
+**/__pycache__/
+**/*.pyc
 backend/.pytest_cache/
 backend/.coverage
 backend/venv/
@@ -66,3 +69,10 @@ temp/
 **/.credentials*
 **/.ssh/
 **/.aws/
+
+# GCP service account and config files exclusions
+gcp-service-account.json
+*.json
+!package.json
+!tsconfig.json
+!next.config.json

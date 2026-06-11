@@ -37,10 +37,12 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
-from .routers import agents, health, heals, integrations, settings_router, traces
+from .routers import agents, health, heals, integrations, settings_router, traces, chat
 from .wa import worker_agent, register, unregister
 from .wa.scheduler import run_scheduler
 from .wa.broadcaster import client_count
+from dotenv import load_dotenv
+load_dotenv()
 
 log = logging.getLogger("aegis")
 logging.basicConfig(
@@ -57,6 +59,23 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Boot the Worker Agent (MCP poller) and the Scheduler (cost/budget)."""
     log.info("AEGIS starting · project=%s location=%s agent=%s",
              settings.gcp_project_id, settings.gcp_location, settings.agent_id)
+
+    # Initialize and connect the MCP client before starting the worker
+    if settings.phoenix_mcp_enabled:
+        log.info("Phoenix MCP is enabled. Connecting to the MCP server...")
+        try:
+            await worker_agent._impl.client.connect()
+            log.info("✅ Phoenix MCP Client connected successfully.")
+            
+            # Startup test: query 5 spans from "AEGIS" and print count
+            log.info("Running startup test: querying 5 spans from project 'AEGIS'...")
+            try:
+                spans = await worker_agent._impl.client.query_spans(project_name="AEGIS", limit=5)
+                log.info("✅ Startup test query successful. Found %d spans in project 'AEGIS'.", len(spans))
+            except Exception as e:
+                log.error("⚠️ Startup test query failed: %s", e)
+        except Exception as e:
+            log.critical("CRITICAL: Failed to connect to Phoenix MCP server during startup: %s. Aegis will run with degraded tracing.", e)
 
     # Start the worker.
     worker_task = asyncio.create_task(worker_agent._impl.start(), name="mcp-worker")
@@ -106,6 +125,7 @@ app.include_router(traces.router,         prefix="/api/traces",         tags=["t
 app.include_router(heals.router,          prefix="/api/heals",          tags=["heals"])
 app.include_router(settings_router.router, prefix="/api/settings",      tags=["settings"])
 app.include_router(integrations.router,   prefix="/api/integrations",   tags=["integrations"])
+app.include_router(chat.router,           prefix="/api/chat",           tags=["chat"])
 
 
 # =============================================================================
@@ -147,7 +167,7 @@ async def ws_endpoint(ws: WebSocket) -> None:
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(
-        "main:app",
+        "backend.main:app",
         host=settings.host,
         port=settings.port,
         reload=False,

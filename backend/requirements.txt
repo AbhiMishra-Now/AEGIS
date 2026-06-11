@@ -35,8 +35,7 @@ google-genai==0.3.0
 # --- Arize Phoenix + OpenInference -------------------------------------------
 # Phoenix is the trace store; OpenInference is the instrumentation layer that
 # sends spans from our GCP/Vertex AI calls into Phoenix automatically.
-arize-phoenix==7.1.0
-phoenix-mcp==0.1.0              # @arizeai/phoenix-mcp (Python wrapper)
+arize-phoenix==17.2.0
 openinference-instrumentation-vertexai==0.1.10
 openinference-instrumentation-google-genai==0.1.10
 opentelemetry-api==1.27.0
@@ -45,3 +44,7 @@ opentelemetry-exporter-otlp-proto-http==1.27.0
 
 # --- Observability of the backend itself (optional but useful) ---------------
 structlog==24.4.0
+
+# --- MCP Client -------------------------------------------------------------
+mcp==1.27.2
+sse-starlette==2.4.1

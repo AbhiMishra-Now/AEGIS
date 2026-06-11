@@ -6,9 +6,9 @@ is the ONLY thing that owns the LoopDetector + the broadcast channel.
 
 LIFECYCLE
 ---------
-1. `await worker.start()` — connects to Phoenix MCP, starts the poller,
-   subscribes the loop handler.
-2. Spans arrive → `LoopDetector.feed()` runs.
+1. `await worker.start()` — connects to Phoenix MCP server, starts the background
+   polling loop, and subscribes the loop handler.
+2. Spans arrive via the polling loop calling `query_spans()` → `_on_span()` runs.
 3. On loop: ask `gemini.judge` to confirm. If confirmed:
    a. `vertex.client.get_agent_instructions` → previous prompt.
    b. `vertex.client.patch_agent_instructions` → new prompt.
@@ -40,6 +40,7 @@ class MCPWorker:
         self._client = PhoenixMCPClient()
         self._detector = LoopDetector()
         self._stop = asyncio.Event()
+        self._poll_task: Optional[asyncio.Task] = None
 
     @property
     def client(self) -> PhoenixMCPClient:
@@ -47,21 +48,94 @@ class MCPWorker:
 
     # ---- lifecycle --------------------------------------------------------
     async def start(self) -> None:
-        self._client.on_span(self._on_span)
-        await self._client.start()
-        await state.set_mcp_connected(True)
+        """Start the worker. Connects to the MCP server and boots the poller task."""
+        self._stop.clear()
+        
+        # Initialize and connect the MCP client if not already connected
+        if not self._client.connected:
+            try:
+                await self._client.connect()
+                await state.set_mcp_connected(True)
+            except Exception:
+                log.exception("Initial MCP connection failed. Will retry in the background polling loop.")
+                await state.set_mcp_connected(False)
+        else:
+            await state.set_mcp_connected(True)
+
+        self._poll_task = asyncio.create_task(self._poll_loop(), name="aegis-mcp-poller")
         log.info("MCPWorker started.")
 
     async def stop(self) -> None:
-        await self._client.stop()
+        """Stop the worker and cancel the background tasks."""
+        self._stop.set()
+        if self._poll_task:
+            self._poll_task.cancel()
+            try:
+                await self._poll_task
+            except asyncio.CancelledError:
+                pass
+            self._poll_task = None
+            
+        await self._client.disconnect()
         await state.set_mcp_connected(False)
         log.info("MCPWorker stopped.")
 
-    # ---- the core pipeline -----------------------------------------------
+    # ---- background polling loop ------------------------------------------
+    async def _poll_loop(self) -> None:
+        """Background loop that polls Arize Phoenix via the MCP client."""
+        while not self._stop.is_set():
+            if not self._client.connected:
+                log.info("Phoenix MCP Client not connected. Attempting connection...")
+                try:
+                    await self._client.connect()
+                    await state.set_mcp_connected(True)
+                    log.info("✅ Phoenix MCP Client connected successfully.")
+                except Exception as e:
+                    log.error("❌ Phoenix MCP Client reconnection failed: %s. Retrying in 10s...", e)
+                    await state.set_mcp_connected(False)
+                    try:
+                        await asyncio.wait_for(self._stop.wait(), timeout=10.0)
+                    except asyncio.TimeoutError:
+                        pass
+                    continue
+
+            try:
+                # Query spans using the get-spans tool
+                spans = await self._client.query_spans(
+                    project_name=settings.phoenix_project,
+                    limit=settings.worker_poll_limit
+                )
+                for ev in spans:
+                    await self._on_span(ev)
+            except Exception as e:
+                log.error("Error polling spans from Phoenix MCP: %s", e)
+                # If we encounter an error (e.g. process died, session lost),
+                # force disconnection so we try to reconnect next iteration
+                try:
+                    await self._client.disconnect()
+                except Exception:
+                    pass
+                await state.set_mcp_connected(False)
+                # Wait 10s before attempting retry/reconnect
+                try:
+                    await asyncio.wait_for(self._stop.wait(), timeout=10.0)
+                except asyncio.TimeoutError:
+                    pass
+                continue
+
+            # Sleep until next poll
+            try:
+                await asyncio.wait_for(
+                    self._stop.wait(),
+                    timeout=float(settings.worker_poll_interval)
+                )
+            except asyncio.TimeoutError:
+                pass
+
+    # ---- the core pipeline ------------------------------------------------
     async def _on_span(self, ev: SpanEvent) -> None:
         # 1. Always store + stream
         s = await state.get_settings()
-        # Default status: success; we'll mark warning/error on loop signals.
         summary = f"tool_call {ev.tool}" if ev.tool else f"model_response"
         trace = self._client.to_trace(ev, "success", summary)
         await state.push_span(trace)
@@ -108,7 +182,7 @@ class MCPWorker:
         if s.auto_heal_enabled:
             try:
                 await self._heal(ev, verdict, loop_event.id)
-                loop_event.autoHealed = True
+                loop_event.auto_healed = True
             except Exception:
                 log.exception("Heal pipeline failed for %s", ev.agent)
 

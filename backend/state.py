@@ -182,7 +182,7 @@ class State:
             if not a:
                 return None
             a.status = status
-            a.lastSeen = datetime.utcnow()
+            a.last_seen = datetime.utcnow()
             self._persist()
             return a.model_copy(deep=True)
 

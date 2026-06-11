@@ -15,11 +15,16 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+from pathlib import Path
+from dotenv import load_dotenv
+
+load_dotenv()
+
 class Settings(BaseSettings):
     """Runtime configuration sourced exclusively from /backend/.env."""
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=Path(__file__).resolve().parent / ".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
@@ -37,10 +42,18 @@ class Settings(BaseSettings):
     )
 
     # ---- Arize Phoenix ----------------------------------------------------
-    arize_api_key: str = Field(..., alias="ARIZE_API_KEY")
+    arize_api_key: str | None = Field(None, alias="ARIZE_API_KEY")
+    phoenix_api_key: str | None = Field(None, alias="PHOENIX_API_KEY")
     phoenix_url: str = Field("https://app.phoenix.arize.com", alias="PHOENIX_URL")
     phoenix_project: str = Field("aegis-prod", alias="PHOENIX_PROJECT")
     phoenix_mcp_url: str = Field("", alias="PHOENIX_MCP_URL")
+    phoenix_mcp_enabled: bool = Field(True, alias="PHOENIX_MCP_ENABLED")
+
+    @property
+    def effective_api_key(self) -> str:
+        """Return PHOENIX_API_KEY if present, otherwise fallback to ARIZE_API_KEY."""
+        return self.phoenix_api_key or self.arize_api_key or ""
+
 
     # ---- Google Cloud Vertex AI -------------------------------------------
     gcp_project_id: str = Field(..., alias="GCP_PROJECT_ID")

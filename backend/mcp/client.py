@@ -1,37 +1,37 @@
 """Arize Phoenix MCP client + heuristic loop detector.
 
-The MCP client polls the Phoenix REST API for new spans in the configured
-project. (The official @arizeai/phoenix-mcp server ships with a Python
-client wrapper, but for full control over backoff and batching we use
-the REST API directly — both code paths end up at the same backend.)
+This client connects to the @arizeai/phoenix-mcp server via stdio
+to query traces and spans. We switched from the direct REST API to MCP 
+for two key reasons:
+  1. API Instability: The Phoenix Cloud REST API is under active development
+     and unstable, leading to authentication issues (e.g. 401s).
+  2. Hackathon Compliance: Hackathon rules require using the Phoenix MCP server 
+     for agent self-introspection.
 
-PHOENIX REST ENDPOINTS USED
----------------------------
-  GET /v1/projects/{project}/spans?start_time=...&limit=...
-      Returns spans as JSON, newest first.
-
-AUTHENTICATION
---------------
-  Header:  api_key: <ARIZE_API_KEY>
-
-NORMALIZATION
--------------
-Phoenix spans are OpenInference-shaped. We normalize to the dashboard's
-`Trace` schema. Anything we can't map becomes an `attributes` blob.
+AUTHENTICATION & CONFIGURATION
+------------------------------
+  Command: npx
+  Args: ["-y", "@arizeai/phoenix-mcp@latest", "--api-key", "<PHOENIX_API_KEY>", "--endpoint", "https://app.phoenix.arize.com"]
 """
 from __future__ import annotations
 
 import asyncio
 import logging
+import json
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Awaitable, Callable, Deque, Dict, List, Optional, Tuple
+from contextlib import AsyncExitStack
 
-import httpx
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
 
 from ..config import settings
 from ..schemas import Trace, SpanStatus
+
+from dotenv import load_dotenv
+load_dotenv()
 
 log = logging.getLogger("aegis.phoenix")
 
@@ -94,35 +94,20 @@ class LoopDetector:
         cutoff = ev.ts - timedelta(seconds=window_sec)
         while bucket and bucket[0] < cutoff:
             bucket.popleft()
-        # We don't store span ids in the bucket; we store timestamps. For
-        # evidence we return timestamps as ISO strings — the dashboard
-        # correlates via the live stream.
         return [b.isoformat() for b in bucket]
 
 
 # =============================================================================
-# Phoenix MCP client (HTTP poller)
+# Phoenix MCP client (Stdio wrapper)
 # =============================================================================
 class PhoenixMCPClient:
-    """Polls the Phoenix REST API for new spans and dispatches them.
-
-    Lifecycle:
-        client = PhoenixMCPClient()
-        client.on_span(callback)
-        await client.start()
-        ...
-        await client.stop()
-
-    The client uses an `asyncio` task that wakes every
-    settings.worker_poll_interval seconds. It tracks the last-seen
-    timestamp per-agent so we only fetch new spans.
-    """
+    """Connects to the Phoenix MCP server via stdio and queries spans."""
 
     def __init__(self) -> None:
         self._callbacks: List[SpanCallback] = []
-        self._task: Optional[asyncio.Task] = None
-        self._stop = asyncio.Event()
         self._connected = False
+        self._exit_stack = AsyncExitStack()
+        self._session: Optional[ClientSession] = None
         # Cursors (epoch-seconds) per agent — what we've already processed.
         self._cursors: Dict[str, float] = defaultdict(lambda: 0.0)
         # Last successful poll — used by /api/health.
@@ -140,64 +125,95 @@ class PhoenixMCPClient:
     def last_poll_at(self) -> Optional[datetime]:
         return self._last_poll_at
 
-    async def start(self) -> None:
-        if self._task and not self._task.done():
+    async def connect(self) -> None:
+        """Connect to the Phoenix MCP server via stdio."""
+        if self._connected:
             return
-        self._stop.clear()
-        self._task = asyncio.create_task(self._poll_loop())
-        log.info("PhoenixMCPClient started → %s", settings.phoenix_url)
 
-    async def stop(self) -> None:
-        self._stop.set()
-        if self._task:
-            self._task.cancel()
-            try:
-                await self._task
-            except (asyncio.CancelledError, Exception):
-                pass
-        self._connected = False
-        log.info("PhoenixMCPClient stopped.")
+        api_key = settings.effective_api_key
+        log.info("Connecting to Phoenix MCP server via npx @arizeai/phoenix-mcp...")
+        
+        server_params = StdioServerParameters(
+            command="npx",
+            args=[
+                "-y",  # run non-interactively
+                "@arizeai/phoenix-mcp@latest",
+                "--api-key",
+                api_key,
+                "--apiKey",
+                api_key,
+                "--endpoint",
+                settings.phoenix_url,
+                "--baseUrl",
+                settings.phoenix_url
+            ]
+        )
 
-    # ---- internal ---------------------------------------------------------
-    async def _dispatch(self, ev: SpanEvent) -> None:
-        for cb in list(self._callbacks):
-            try:
-                await cb(ev)
-            except Exception:
-                log.exception("PhoenixMCP callback failed")
-
-    async def _poll_once(self) -> List[SpanEvent]:
-        """Fetch new spans from Phoenix. Returns the parsed events."""
-        url = settings.phoenix_url.rstrip("/") + f"/v1/projects/{settings.phoenix_project}/spans"
-        params = {
-            "limit": str(settings.worker_poll_limit),
-            "order": "desc",
-        }
-        headers = {
-            "api_key": settings.arize_api_key,
-            "Accept": "application/json",
-        }
-        out: List[SpanEvent] = []
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                resp = await client.get(url, params=params, headers=headers)
-                if resp.status_code in (401, 403):
-                    log.error("Phoenix auth failed: %s %s", resp.status_code, resp.text[:200])
-                    self._connected = False
-                    return []
-                if resp.status_code >= 500:
-                    log.warning("Phoenix 5xx (%s), will retry.", resp.status_code)
-                    self._connected = False
-                    return []
-                resp.raise_for_status()
-                payload = resp.json()
-        except httpx.HTTPError:
-            log.exception("Phoenix poll failed")
-            self._connected = False
+            read_stream, write_stream = await self._exit_stack.enter_async_context(
+                stdio_client(server_params)
+            )
+            self._session = await self._exit_stack.enter_async_context(
+                ClientSession(read_stream, write_stream)
+            )
+            await self._session.initialize()
+            
+            # Verify connection by listing tools
+            tools = await self._session.list_tools()
+            log.info("Successfully connected to Phoenix MCP server. Tools: %s", [t.name for t in tools.tools])
+            self._connected = True
+        except Exception as e:
+            log.exception("Failed to connect to Phoenix MCP server")
+            await self.disconnect()
+            raise
+
+    async def disconnect(self) -> None:
+        """Disconnect and clean up subprocess streams."""
+        self._connected = False
+        self._session = None
+        await self._exit_stack.aclose()
+        self._exit_stack = AsyncExitStack()
+        log.info("Phoenix MCP client disconnected and exit stack cleaned up.")
+
+    async def query_spans(self, project_name: str = "AEGIS", limit: int = 200) -> List[SpanEvent]:
+        """Query spans from the Phoenix MCP get-spans tool."""
+        if not self._connected or not self._session:
+            raise RuntimeError("MCP client is not connected.")
+
+        try:
+            # Call the get-spans tool exposed by the MCP server
+            result = await self._session.call_tool(
+                "get-spans",
+                arguments={
+                    "project_identifier": project_name,
+                    "limit": limit
+                }
+            )
+        except Exception as e:
+            log.error("Failed to query spans via MCP tool call: %s", e)
+            self._connected = False  # trigger reconnect
+            raise
+
+        if not result.content or len(result.content) == 0:
             return []
 
-        # Phoenix returns either a list or {data: [...]} depending on version.
-        items = payload if isinstance(payload, list) else payload.get("data", [])
+        text = result.content[0].text
+        try:
+            data = json.loads(text)
+        except Exception as e:
+            log.error("Failed to parse get-spans JSON response: %s", e)
+            return []
+
+        if isinstance(data, list):
+            items = data
+        elif isinstance(data, dict):
+            items = data.get("spans") or data.get("data") or []
+            if not isinstance(items, list):
+                items = [items]
+        else:
+            items = []
+
+        out: List[SpanEvent] = []
         for raw in items:
             try:
                 ev = self._parse_span(raw)
@@ -211,13 +227,26 @@ class PhoenixMCPClient:
             self._cursors[cursor_key] = ts_epoch
             out.append(ev)
 
-        self._connected = True
         self._last_poll_at = datetime.utcnow()
         return out
 
+    def detect_loop_pattern(self, spans: List[SpanEvent]) -> bool:
+        """Analyze a list of spans for repeated tool calls within LOOP_WINDOW_SECONDS."""
+        detector = LoopDetector()
+        for ev in spans:
+            if detector.feed(ev, settings.loop_tool_threshold, settings.loop_window_seconds):
+                return True
+        return False
+
+    async def _dispatch(self, ev: SpanEvent) -> None:
+        for cb in list(self._callbacks):
+            try:
+                await cb(ev)
+            except Exception:
+                log.exception("PhoenixMCP callback failed")
+
     def _parse_span(self, raw: Dict) -> SpanEvent:
         """Normalize a Phoenix span to the internal SpanEvent shape."""
-        # Phoenix's OpenInference schema uses snake_case.
         ts_raw = raw.get("start_time") or raw.get("timestamp") or raw.get("ts")
         if isinstance(ts_raw, (int, float)):
             ts = datetime.utcfromtimestamp(float(ts_raw))
@@ -227,46 +256,39 @@ class PhoenixMCPClient:
             ts = datetime.utcnow()
 
         attrs = raw.get("attributes") or {}
-        # The agent name lives in attributes.agent.name in OpenInference.
         agent = (
             attrs.get("agent.name")
             or raw.get("name")
             or raw.get("agent")
             or "unknown-agent"
         )
-        # Model
         model = (
             attrs.get("llm.model")
             or attrs.get("model")
             or raw.get("model")
             or "gemini-2.5-pro"
         )
-        # Tool name
         tool = (
             attrs.get("tool.name")
             or attrs.get("openinference.span.kind")
             or raw.get("tool")
         )
-        # Tokens
         tokens = int(
             attrs.get("llm.token_count.total")
             or attrs.get("llm.usage.total_tokens")
             or raw.get("tokens")
             or 0
         )
-        # Cost (Phoenix doesn't always have this — estimate from tokens if missing)
         cost = float(
             attrs.get("aegis.cost")
             or raw.get("cost")
             or (tokens * 3.5e-6)
         )
-        # Latency
         latency_ms = int(
             attrs.get("aegis.latency_ms")
             or raw.get("latency_ms")
             or 0
         )
-        # Span ids
         trace_id = raw.get("trace_id") or raw.get("context.trace_id") or raw.get("id") or "unknown-trace"
         span_id = raw.get("span_id") or raw.get("id") or f"span_{ts.timestamp()}"
 
@@ -303,31 +325,108 @@ class PhoenixMCPClient:
             },
         )
 
-    async def _poll_loop(self) -> None:
-        """The main polling loop.
 
-        We poll on a fixed interval. On failure we back off exponentially
-        up to 60s. On success we reset the backoff.
-        """
-        backoff = 1.0
-        while not self._stop.is_set():
-            try:
-                events = await self._poll_once()
-                backoff = 1.0  # reset on success
-                for ev in events:
-                    await self._dispatch(ev)
-            except Exception:
-                log.exception("Poll loop error")
-            # Sleep with cancellation support.
-            try:
-                await asyncio.wait_for(
-                    self._stop.wait(),
-                    timeout=float(settings.worker_poll_interval),
-                )
-                break  # stop event fired
-            except asyncio.TimeoutError:
-                pass
-            # Optional exponential backoff if we're disconnected.
-            if not self._connected:
-                await asyncio.sleep(min(60.0, backoff))
-                backoff = min(60.0, backoff * 2.0)
+# =============================================================================
+# === LEGACY REST API (DISABLED) ===
+# =============================================================================
+# import httpx
+#
+# class PhoenixMCPClientRESTFallback:
+#     def __init__(self) -> None:
+#         self._callbacks: List[SpanCallback] = []
+#         self._task: Optional[asyncio.Task] = None
+#         self._stop = asyncio.Event()
+#         self._connected = False
+#         self._cursors: Dict[str, float] = defaultdict(lambda: 0.0)
+#         self._last_poll_at: Optional[datetime] = None
+#
+#     async def start(self) -> None:
+#         if self._task and not self._task.done():
+#             return
+#         self._stop.clear()
+#         self._task = asyncio.create_task(self._poll_loop())
+#         log.info("PhoenixMCPClient started → %s", settings.phoenix_url)
+#
+#     async def stop(self) -> None:
+#         self._stop.set()
+#         if self._task:
+#             self._task.cancel()
+#             try:
+#                 await self._task
+#             except (asyncio.CancelledError, Exception):
+#                 pass
+#         self._connected = False
+#         log.info("PhoenixMCPClient stopped.")
+#
+#     async def _poll_once(self) -> List[SpanEvent]:
+#         """Fetch new spans from Phoenix. Returns the parsed events."""
+#         url = settings.phoenix_url.rstrip("/") + f"/v1/projects/{settings.phoenix_project}/spans"
+#         params = {
+#             "limit": str(settings.worker_poll_limit),
+#             "order": "desc",
+#         }
+#         api_key = settings.effective_api_key
+#         headers = {
+#             "Authorization": f"Bearer {api_key}",
+#             "Content-Type": "application/json",
+#             "Accept": "application/json",
+#         }
+#         out: List[SpanEvent] = []
+#         try:
+#             async with httpx.AsyncClient(timeout=15.0) as client:
+#                 resp = await client.get(url, params=params, headers=headers)
+#                 if resp.status_code in (401, 403):
+#                     log.error("Phoenix auth failed: %s %s", resp.status_code, resp.text[:200])
+#                     self._connected = False
+#                     return []
+#                 if resp.status_code >= 500:
+#                     log.warning("Phoenix 5xx (%s), will retry.", resp.status_code)
+#                     self._connected = False
+#                     return []
+#                 resp.raise_for_status()
+#                 payload = resp.json()
+#         except httpx.HTTPError:
+#             log.exception("Phoenix poll failed")
+#             self._connected = False
+#             return []
+#
+#         items = payload if isinstance(payload, list) else payload.get("data", [])
+#         for raw in items:
+#             try:
+#                 ev = self._parse_span(raw)
+#             except Exception:
+#                 log.exception("Failed to parse Phoenix span")
+#                 continue
+#             cursor_key = ev.agent
+#             ts_epoch = ev.ts.timestamp()
+#             if ts_epoch <= self._cursors[cursor_key]:
+#                 continue
+#             self._cursors[cursor_key] = ts_epoch
+#             out.append(ev)
+#
+#         self._connected = True
+#         self._last_poll_at = datetime.utcnow()
+#         return out
+#
+#     async def _poll_loop(self) -> None:
+#         backoff = 1.0
+#         while not self._stop.is_set():
+#             try:
+#                 events = await self._poll_once()
+#                 backoff = 1.0
+#                 for ev in events:
+#                     await self._dispatch(ev)
+#             except Exception:
+#                 log.exception("Poll loop error")
+#             try:
+#                 await asyncio.wait_for(
+#                     self._stop.wait(),
+#                     timeout=float(settings.worker_poll_interval),
+#                 )
+#                 break
+#             except asyncio.TimeoutError:
+#                 pass
+#             if not self._connected:
+#                 await asyncio.sleep(min(60.0, backoff))
+#                 backoff = min(60.0, backoff * 2.0)
+# =============================================================================

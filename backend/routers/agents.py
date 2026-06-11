@@ -56,6 +56,6 @@ async def resume_agent(agent_id: str) -> AgentToggleResponse:
 @router.post("", response_model=Agent)
 async def register_agent(agent: Agent) -> Agent:
     """Register a new agent with AEGIS. Idempotent on `id`."""
-    if not agent.lastSeen:
-        agent.lastSeen = datetime.utcnow()
+    if not agent.last_seen:
+        agent.last_seen = datetime.utcnow()
     return await state.register_agent(agent)
