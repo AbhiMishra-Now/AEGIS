@@ -34,30 +34,41 @@ Agents get stuck in expensive loops. During e-commerce AI development, we watche
 ## 🏗️ System Architecture
 
 ```mermaid
+%%{init: {'theme':'dark', 'themeVariables': { 'primaryColor': '#1a1a2e', 'secondaryColor': '#16213e', 'tertiaryColor': '#0f3460', 'fontFamily': 'Inter, system-ui, sans-serif', 'nodeBorder': '#4a5568', 'lineColor': '#718096' }}}%%
 graph TB
-    subgraph "Frontend Layer (Vercel)"
-        UI[Next.js 14 Dashboard]
-        WS_Client[WebSocket Client]
-        LiveToggle["Live/Demo Mode Toggle"]
+    classDef frontend fill:#000000,stroke:#ffffff,stroke-width:2px,color:#ffffff,font-weight:bold;
+    classDef backend fill:#009688,stroke:#ffffff,stroke-width:2px,color:#ffffff,font-weight:bold;
+    classDef agent fill:#4285F4,stroke:#ffffff,stroke-width:2px,color:#ffffff,font-weight:bold;
+    classDef phoenix fill:#FF6B35,stroke:#ffffff,stroke-width:2px,color:#ffffff,font-weight:bold;
+    classDef worker fill:#7C3AED,stroke:#ffffff,stroke-width:2px,color:#ffffff,font-weight:bold;
+
+    subgraph Frontend["🖥️ Frontend Layer (Vercel)"]
+        direction TB
+        UI[Next.js 14 Dashboard]:::frontend
+        WS_Client[WebSocket Client]:::frontend
+        LiveToggle["Live/Demo Mode Toggle"]:::frontend
     end
 
-    subgraph "Backend Orchestration (Cloud Run)"
-        API[FastAPI REST API]
-        WS_Server[WebSocket Server]
-        Worker[Asyncio Sentinel Worker]
-        Judge[Gemini LLM-as-Judge]
+    subgraph Backend["⚙️ Backend Orchestration (Cloud Run)"]
+        direction TB
+        API[FastAPI REST API]:::backend
+        WS_Server[WebSocket Server]:::backend
+        Worker[Asyncio Sentinel Worker]:::worker
+        Judge[Gemini LLM-as-Judge]:::worker
     end
 
-    subgraph "AI Agent Runtime (GCP Vertex AI)"
-        Agent[Agent Builder App]
-        DataStore[aegis-data-store]
-        Tracing[OpenInference Instrumentor]
+    subgraph AgentRuntime["🤖 AI Agent Runtime (GCP Vertex AI)"]
+        direction TB
+        Agent[Agent Builder App]:::agent
+        DataStore[aegis-data-store]:::agent
+        Tracing[OpenInference Instrumentor]:::agent
     end
 
-    subgraph "Observability & Introspection (Arize Phoenix)"
-        Phoenix[Phoenix Cloud Trace Store]
-        MCP[Phoenix MCP Server]
-        Spans[Spans / Traces / Metrics]
+    subgraph Observability["🔍 Observability & Introspection (Arize Phoenix)"]
+        direction TB
+        Phoenix[Phoenix Cloud Trace Store]:::phoenix
+        MCP[Phoenix MCP Server]:::phoenix
+        Spans[Spans / Traces / Metrics]:::phoenix
     end
 
     UI -->|"REST /api/*"| API
@@ -75,11 +86,7 @@ graph TB
     Worker -->|"Update Prompt"| Agent
     Worker -->|"Push Event"| WS_Server
 
-    style UI fill:#000,stroke:#fff,color:#fff
-    style API fill:#009688,stroke:#fff,color:#fff
-    style Agent fill:#4285F4,stroke:#fff,color:#fff
-    style Phoenix fill:#FF6B35,stroke:#fff,color:#fff
-    style Worker fill:#7C3AED,stroke:#fff,color:#fff
+    linkStyle default stroke:#718096,stroke-width:1.5px,fill:none;
 ```
 
 ### Architecture Components
