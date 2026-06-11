@@ -1,4 +1,4 @@
-# ️ AEGIS Sentinel: Autonomous AI Agent Guardian
+# ️ AEGIS: Autonomous AI Agent Guardian
 
 > **Google Rapid AI Agent Hackathon | Arize Track Submission**
 
