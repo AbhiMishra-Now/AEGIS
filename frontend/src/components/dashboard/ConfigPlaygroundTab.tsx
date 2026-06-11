@@ -588,26 +588,27 @@ export default function ConfigPlaygroundTab() {
         </div>
 
         <div className="scrollbar-thin min-h-0 flex-1 overflow-auto bg-ink-950/40 py-2">
-          <AnimatePresence initial={false}>
-            {promptLines.map((line, idx) => {
-              const original = SYSTEM_PROMPT_INITIAL.split("\n");
-              const healed = SYSTEM_PROMPT_HEALED.split("\n");
-              const isInOriginal = original.includes(line);
-              const isInHealed = healed.includes(line);
-              let status: "kept" | "added" | "removed" | undefined;
-              if (isHealing || isHealed) {
-                if (!isInOriginal && isInHealed) status = "added";
-                else if (isInOriginal && !isInHealed) status = "removed";
-                else status = "kept";
-              }
-              return (
-                <CodeLine key={`${idx}-${line.length}`} text={line} status={status} />
-              );
-            })}
+          {promptLines.map((line, idx) => {
+            const original = SYSTEM_PROMPT_INITIAL.split("\n");
+            const healed = SYSTEM_PROMPT_HEALED.split("\n");
+            const isInOriginal = original.includes(line);
+            const isInHealed = healed.includes(line);
+            let status: "kept" | "added" | "removed" | undefined;
+            if (isHealing || isHealed) {
+              if (!isInOriginal && isInHealed) status = "added";
+              else if (isInOriginal && !isInHealed) status = "removed";
+              else status = "kept";
+            }
+            return (
+              <CodeLine key={`${idx}-${line.length}`} text={line} status={status} />
+            );
+          })}
+          <AnimatePresence>
             {isHealing && (
               <motion.div
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
                 className="mx-3 mt-2 flex items-center gap-2 rounded-md border border-arize-400/20 bg-arize-500/[0.04] px-2 py-1.5 text-[11px] font-mono text-arize-200"
               >
                 <Wand2 className="h-3 w-3" /> aegis · sentinel · typing new policy…

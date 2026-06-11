@@ -267,7 +267,7 @@ export default function SettingsTab() {
     return (
       <div className="flex h-[60vh] items-center justify-center text-sm text-ink-300">
         <Loader2 className="mr-2 h-4 w-4 animate-spin text-arize-300" />
-        Loading settings from FastAPI…
+        Loading settings
       </div>
     );
   }

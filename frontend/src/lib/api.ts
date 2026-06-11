@@ -23,7 +23,16 @@
  *   WS     /ws/dashboard
  */
 
-const API_BASE = (import.meta as any).env?.VITE_API_BASE ?? "/api";
+const getApiBase = () => {
+  const backendUrl = (import.meta as any).env?.NEXT_PUBLIC_BACKEND_URL;
+  if (backendUrl) {
+    const baseUrl = backendUrl.endsWith("/") ? backendUrl.slice(0, -1) : backendUrl;
+    return `${baseUrl}/api`;
+  }
+  return (import.meta as any).env?.VITE_API_BASE ?? "/api";
+};
+
+const API_BASE = getApiBase();
 const WS_BASE = (import.meta as any).env?.VITE_WS_BASE ?? "/ws";
 
 /* ------------------------------ types --------------------------------- */
@@ -192,22 +201,24 @@ export async function fetchAgents(): Promise<Agent[]> {
 }
 
 export async function pauseAgent(id: string): Promise<Agent> {
-  return tryFetch<Agent>(`/agents/${id}/pause`, { method: "POST" }, () => {
+  const res = await tryFetch<any>(`/agents/${id}/pause`, { method: "POST" }, () => {
     const a = mockAgents.find((x) => x.id === id);
     if (!a) throw new Error("agent not found");
     a.status = "paused";
     return a;
   });
+  return res && typeof res === "object" && "agent" in res ? res.agent : res;
 }
 
 export async function resumeAgent(id: string): Promise<Agent> {
-  return tryFetch<Agent>(`/agents/${id}/resume`, { method: "POST" }, () => {
+  const res = await tryFetch<any>(`/agents/${id}/resume`, { method: "POST" }, () => {
     const a = mockAgents.find((x) => x.id === id);
     if (!a) throw new Error("agent not found");
     a.status = "healthy";
     a.lastSeen = new Date().toISOString();
     return a;
   });
+  return res && typeof res === "object" && "agent" in res ? res.agent : res;
 }
 
 /* ----------------------------- settings ------------------------------- */
@@ -236,7 +247,7 @@ export async function fetchIntegrations(): Promise<ApiKeyMeta[]> {
  * The backend will update /backend/.env and the response is the masked meta.
  */
 export async function rotateIntegrationKey(provider: string): Promise<ApiKeyMeta> {
-  return tryFetch<ApiKeyMeta>(
+  const res = await tryFetch<any>(
     `/integrations/${provider}/rotate`,
     { method: "POST" },
     () => {
@@ -248,6 +259,7 @@ export async function rotateIntegrationKey(provider: string): Promise<ApiKeyMeta
       return k;
     }
   );
+  return res && typeof res === "object" && "meta" in res ? res.meta : res;
 }
 
 /* ----------------------------- realtime ------------------------------- */
@@ -256,8 +268,17 @@ export function connectDashboardSocket(onMessage: (data: unknown) => void): () =
   let ws: WebSocket | null = null;
   let interval: number | null = null;
   try {
-    const proto = window.location.protocol === "https:" ? "wss" : "ws";
-    ws = new WebSocket(`${proto}://${window.location.host}${WS_BASE}/dashboard`);
+    const backendUrl = (import.meta as any).env?.NEXT_PUBLIC_BACKEND_URL;
+    let wsUrl = "";
+    if (backendUrl) {
+      const url = new URL(backendUrl);
+      const proto = url.protocol === "https:" ? "wss" : "ws";
+      wsUrl = `${proto}://${url.host}/ws`;
+    } else {
+      const proto = window.location.protocol === "https:" ? "wss" : "ws";
+      wsUrl = `${proto}://${window.location.host}${WS_BASE}`;
+    }
+    ws = new WebSocket(wsUrl);
     ws.onmessage = (e) => {
       try {
         onMessage(JSON.parse(e.data));

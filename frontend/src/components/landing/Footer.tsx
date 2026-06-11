@@ -90,7 +90,7 @@ export default function Footer() {
         </div>
         <div className="mt-12 flex flex-col items-start justify-between gap-3 border-t border-white/[0.06] pt-6 text-[12px] text-ink-300 md:flex-row md:items-center">
           <div>
-            © 2024 AEGIS Project | Google Cloud x Arize Hackathon Submission
+            © 2026 AEGIS Project | powered by Google Cloud x Arize
           </div>
           <div className="flex items-center gap-4">
             <Link to="/about" className="hover:text-white">

@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { Badge, Button, Dot, cn } from "../ui/Primitives";
 import { fetchAgents, pauseAgent, resumeAgent, type Agent } from "../../lib/api";
+import { useAegisData } from "../../lib/useAegisData";
 
 /**
  * Agents tab — the operator's view of every Vertex AI agent under AEGIS's care.
@@ -72,21 +73,27 @@ function statusDot(status: Agent["status"]) {
 }
 
 export default function AgentsTab() {
-  const [agents, setAgents] = useState<Agent[] | null>(null);
+  const { agents, setAgents, liveMode, setLiveMode, loading, error, dismissError, refresh } = useAegisData();
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
 
   async function load() {
     setRefreshing(true);
-    const data = await fetchAgents();
-    setAgents(data);
+    if (liveMode) {
+      await refresh();
+    } else {
+      const data = await fetchAgents();
+      setAgents(data);
+    }
     setRefreshing(false);
   }
 
   useEffect(() => {
-    load();
-  }, []);
+    if (!liveMode) {
+      load();
+    }
+  }, [liveMode]);
 
   async function handleToggle(a: Agent) {
     setBusy(a.id);
@@ -122,6 +129,29 @@ export default function AgentsTab() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {/* LIVE/DEMO Toggle */}
+          <div className="flex items-center gap-1 rounded-lg border border-white/[0.06] bg-white/[0.02] p-1 text-[12px]">
+            <button
+              onClick={() => setLiveMode(false)}
+              className={cn(
+                "rounded-md px-2.5 py-1 font-medium transition-colors cursor-pointer",
+                !liveMode ? "bg-white/[0.08] text-white" : "text-ink-300 hover:text-white"
+              )}
+            >
+              Demo
+            </button>
+            <button
+              onClick={() => setLiveMode(true)}
+              className={cn(
+                "rounded-md px-2.5 py-1 font-medium transition-colors flex items-center gap-1 cursor-pointer",
+                liveMode ? "bg-arize-500 text-white shadow-[0_0_10px_rgba(138,99,255,0.4)]" : "text-ink-300 hover:text-white"
+              )}
+            >
+              {liveMode && <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />}
+              Live
+            </button>
+          </div>
+
           <div className="flex items-center gap-2 rounded-lg border border-white/[0.06] bg-white/[0.02] px-2.5 py-1.5 text-[12px] text-ink-300">
             <Search className="h-3.5 w-3.5" />
             <input
@@ -194,18 +224,51 @@ export default function AgentsTab() {
         </div>
 
         <AnimatePresence initial={false}>
-          {filtered.length === 0 && agents === null && (
-            <li className="block list-none px-5 py-12 text-center text-sm text-ink-300">
-              <Loader2 className="mx-auto h-5 w-5 animate-spin text-arize-300" />
-              <p className="mt-2">Loading agents from FastAPI…</p>
-            </li>
-          )}
-          {filtered.length === 0 && agents !== null && (
-            <li className="block list-none px-5 py-12 text-center text-sm text-ink-300">
-              No agents match "{query}".
-            </li>
-          )}
-          {filtered.map((a) => (
+          {loading ? (
+            Array.from({ length: 4 }).map((_, idx) => (
+              <div
+                key={`skeleton-${idx}`}
+                className="grid grid-cols-12 items-center gap-2 border-b border-white/[0.04] px-5 py-3.5 last:border-b-0"
+              >
+                <div className="col-span-12 md:col-span-4 flex items-center gap-2.5">
+                  <div className="h-2 w-2 rounded-full bg-white/10 animate-pulse" />
+                  <div className="flex flex-col gap-1.5">
+                    <div className="h-4 w-28 rounded bg-white/10 animate-pulse" />
+                    <div className="h-3 w-36 rounded bg-white/5 animate-pulse" />
+                  </div>
+                </div>
+                <div className="col-span-6 font-mono text-[12px] md:col-span-2">
+                  <div className="h-3.5 w-24 rounded bg-white/10 animate-pulse" />
+                </div>
+                <div className="col-span-6 font-mono text-[12px] md:col-span-2">
+                  <div className="h-3.5 w-16 rounded bg-white/10 animate-pulse" />
+                </div>
+                <div className="col-span-6 text-right font-mono text-[12px] md:col-span-1">
+                  <div className="h-3.5 w-8 ml-auto rounded bg-white/10 animate-pulse" />
+                </div>
+                <div className="col-span-6 text-right font-mono text-[12px] md:col-span-1">
+                  <div className="h-3.5 w-8 ml-auto rounded bg-white/10 animate-pulse" />
+                </div>
+                <div className="col-span-12 flex items-center justify-end gap-2 md:col-span-2">
+                  <div className="h-8 w-8 rounded bg-white/10 animate-pulse" />
+                  <div className="h-8 w-20 rounded bg-white/10 animate-pulse" />
+                </div>
+              </div>
+            ))
+          ) : (
+            <>
+              {filtered.length === 0 && agents === null && (
+                <li className="block list-none px-5 py-12 text-center text-sm text-ink-300">
+                  <Loader2 className="mx-auto h-5 w-5 animate-spin text-arize-300" />
+                  <p className="mt-2">Loading agents from FastAPI…</p>
+                </li>
+              )}
+              {filtered.length === 0 && agents !== null && (
+                <li className="block list-none px-5 py-12 text-center text-sm text-ink-300">
+                  No agents match "{query}".
+                </li>
+              )}
+              {filtered.map((a) => (
             <motion.div
               key={a.id}
               layout
@@ -273,6 +336,8 @@ export default function AgentsTab() {
               </div>
             </motion.div>
           ))}
+            </>
+          )}
         </AnimatePresence>
       </div>
 
@@ -287,6 +352,32 @@ export default function AgentsTab() {
           </p>
         </div>
       </div>
+
+      {/* Floating Error Toast */}
+      <AnimatePresence>
+        {error && (
+          <motion.div
+            initial={{ opacity: 0, y: 10, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.95 }}
+            className="fixed bottom-6 right-6 z-50 flex max-w-sm items-start gap-3 rounded-xl border border-rose-500/30 bg-ink-900/95 p-4 shadow-2xl backdrop-blur-md"
+          >
+            <div className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-rose-500/10 text-rose-400">
+              <AlertTriangle className="h-3.5 w-3.5" />
+            </div>
+            <div className="flex-1">
+              <h4 className="text-[13px] font-semibold text-white">Live Mode Connection Error</h4>
+              <p className="mt-1 text-[11.5px] text-ink-300 leading-relaxed">{error}</p>
+              <button
+                onClick={dismissError}
+                className="mt-2 text-[10.5px] font-medium text-rose-300 hover:text-rose-200 transition-colors cursor-pointer"
+              >
+                Dismiss
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
