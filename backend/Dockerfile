@@ -1,9 +1,7 @@
 FROM python:3.12-slim
 
 # Install Node.js and npm (required for npx @arizeai/phoenix-mcp)
-RUN apt-get update && apt-get install -y curl gnupg && \
-    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
-    apt-get install -y nodejs && \
+RUN apt-get update && apt-get install -y nodejs npm && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
