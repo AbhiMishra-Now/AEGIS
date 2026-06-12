@@ -47,7 +47,7 @@ export default function Nav() {
         </nav>
         <div className="flex items-center gap-3">
           <a
-            href="https:github.com/repo"
+            href="https://github.com/AbhiMishra-Now/AEGIS"
             target="_blank"
             rel="noreferrer"
             className="hidden text-ink-300 transition-colors hover:text-white md:inline-flex"

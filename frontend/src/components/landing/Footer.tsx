@@ -11,7 +11,7 @@ const PRODUCT: LinkItem[] = [
 ];
 const RESOURCES: LinkItem[] = [
   { label: "Docs", to: "/docs" },
-  { label: "GitHub Repo", href: "https://github.com/your-repo" },
+  { label: "GitHub Repo", href: "https://github.com/AbhiMishra-Now/AEGIS" },
 ];
 const COMPANY: LinkItem[] = [
   { label: "About", to: "/about" },
