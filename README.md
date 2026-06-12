@@ -20,6 +20,17 @@ Agents get stuck in expensive loops. During e-commerce AI development, we watche
 
 ---
 
+## 🎥 Demo Video
+
+<div align="center">
+  <a href="https://youtu.be/xqVJ3aMyeys">
+    <img src="https://img.youtube.com/vi/xqVJ3aMyeys/maxresdefault.jpg" alt="AEGIS Sentinel Demo" width="600px" />
+  </a>
+  <br>
+  <sub>▶️ Click the above image to watch the demo on YouTube</sub>
+</div>
+
+---
 ## ✨ Key Accomplishments
 
 -   **Meta-Agent Architecture:** First-of-its-kind system where one AI agent watches and heals others via MCP introspection
