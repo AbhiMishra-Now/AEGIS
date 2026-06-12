@@ -24,6 +24,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+os.environ["OTEL_LOG_LEVEL"] = "debug"
 from functools import lru_cache
 from typing import Any, Dict, List, Optional
 
@@ -56,7 +57,16 @@ def _setup_tracing() -> None:
     # Use EXACT collector endpoint from UI including /s/... subpath
     collector_url = os.getenv("PHOENIX_COLLECTOR_ENDPOINT") 
     if not collector_url:
-        collector_url = f"{os.getenv('PHOENIX_URL', 'https://app.phoenix.arize.com')}/v1/traces"
+        collector_url = os.getenv("PHOENIX_URL", "https://app.phoenix.arize.com")
+        
+    # Strip /v1/traces or /v1/spans or trailing slash if present to match EXACTLY what is required
+    if collector_url:
+        collector_url = collector_url.rstrip("/")
+        if collector_url.endswith("/v1/traces"):
+            collector_url = collector_url[:-10]
+        elif collector_url.endswith("/v1/spans"):
+            collector_url = collector_url[:-9]
+        collector_url = collector_url.rstrip("/")
 
     log.info("Registering trace exporter to %s", collector_url)
 

@@ -15,8 +15,9 @@ class ChatRequest(BaseModel):
     message: str
 
 class ChatResponse(BaseModel):
-    response: str
-    trace_id: str = Field(..., alias="traceId")
+    answer: str
+    response: str | None = None
+    trace_id: str | None = Field(None, alias="traceId")
 
 @router.post("", response_model=ChatResponse)
 async def chat(req: ChatRequest) -> ChatResponse:
@@ -27,14 +28,26 @@ async def chat(req: ChatRequest) -> ChatResponse:
     try:
         result = await invoke_agent(prompt=req.message)
         
-        # If there's an error in invoke_agent, return it or raise
         response_text = result.get("response", "")
-        trace_id = result.get("trace_id", "")
+        trace_id = result.get("trace_id", None) or None
         
+        # If GCP call returned an error message, fall back gracefully
+        if not response_text or response_text.startswith("Error") or "Discovery Engine error" in response_text:
+            return ChatResponse(
+                answer="Agent unavailable. Please try again.",
+                response="Agent unavailable. Please try again.",
+                traceId=trace_id
+            )
+            
         return ChatResponse(
+            answer=response_text,
             response=response_text,
             traceId=trace_id
         )
     except Exception as e:
         log.exception("Chat endpoint failed")
-        raise HTTPException(status_code=500, detail=f"Internal chat error: {e}")
+        return ChatResponse(
+            answer="Agent unavailable. Please try again.",
+            response="Agent unavailable. Please try again.",
+            traceId=None
+        )

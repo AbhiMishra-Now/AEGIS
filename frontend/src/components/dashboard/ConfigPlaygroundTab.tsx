@@ -23,6 +23,15 @@ import {
 } from "../../lib/mockData";
 import { useRealtime } from "./RealtimeContext";
 
+const getApiBase = () => {
+  const backendUrl = (import.meta as any).env?.NEXT_PUBLIC_BACKEND_URL;
+  if (backendUrl) {
+    const baseUrl = backendUrl.endsWith("/") ? backendUrl.slice(0, -1) : backendUrl;
+    return `${baseUrl}/api`;
+  }
+  return (import.meta as any).env?.VITE_API_BASE ?? "/api";
+};
+
 /* ----------------------------- Code Editor ------------------------------ */
 function highlight(line: string) {
   // Tiny, hand-rolled highlighter for our prompt demo
@@ -198,6 +207,8 @@ export default function ConfigPlaygroundTab() {
     SYSTEM_PROMPT_INITIAL.split("\n")
   );
   const [phase, setPhase] = useState<"idle" | "loop" | "healing" | "healed">("idle");
+  const [loading, setLoading] = useState(false);
+  const [isError, setIsError] = useState(false);
   const [messages, setMessages] = useState<ChatMsg[]>([
     {
       id: "init",
@@ -320,38 +331,56 @@ export default function ConfigPlaygroundTab() {
           setPhase("healing");
           return;
         }
-        setMessages((prev) => [...prev, LOOP_SCRIPT[i]]);
+        const msg = {
+          ...LOOP_SCRIPT[i],
+          id: `l_${i}_${Date.now()}`
+        };
+        setMessages((prev) => [...prev, msg]);
         i++;
       }, 380);
-    } else if (phase === "healed") {
-      // Normal response after healing
-      setTimeout(() => {
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: "a_" + Date.now(),
-            role: "agent",
-            content:
-              "Got it — here's what I found. (This agent now follows the patched policy and won't retry identical searches.)",
-            status: "ok",
-            meta: "ok",
-          },
-        ]);
-      }, 700);
     } else {
-      setTimeout(() => {
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: "a_" + Date.now(),
-            role: "agent",
-            content:
-              "Looking that up… (tip: try asking me to \"search for the invisible apple\" to trigger Sentinel).",
-            status: "ok",
-            meta: "ok",
+      setLoading(true);
+      setIsError(false);
+      try {
+        const apiBase = getApiBase();
+        fetch(`${apiBase}/chat`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
           },
-        ]);
-      }, 700);
+          body: JSON.stringify({ message: text }),
+        })
+          .then((res) => {
+            if (!res.ok) {
+              throw new Error(`Server returned status ${res.status}`);
+            }
+            return res.json();
+          })
+          .then((data) => {
+            const content = data?.answer ?? data?.response ?? "Error generating response";
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: "a_" + Date.now(),
+                role: "agent",
+                content,
+                status: "ok",
+                meta: data?.traceId ?? data?.trace_id ?? "ok",
+              },
+            ]);
+          })
+          .catch((err) => {
+            console.error("Error in chat response processing:", err);
+            setIsError(true);
+          })
+          .finally(() => {
+            setLoading(false);
+          });
+      } catch (err) {
+        console.error("Error initiating fetch to /api/chat:", err);
+        setIsError(true);
+        setLoading(false);
+      }
     }
   }
 
@@ -500,6 +529,36 @@ export default function ConfigPlaygroundTab() {
               </div>
             </motion.div>
           )}
+          {loading && (
+            <motion.div
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="flex gap-2.5"
+            >
+              <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-arize-400/30 bg-arize-500/15 text-arize-200">
+                <Bot className="h-3.5 w-3.5" />
+              </div>
+              <div className="max-w-[80%] rounded-2xl border border-white/[0.06] bg-white/[0.02] px-3 py-2 text-[13px] leading-relaxed text-ink-300 flex items-center gap-2">
+                <Loader2 className="h-3 w-3 animate-spin text-arize-400" />
+                <span>Thinking...</span>
+              </div>
+            </motion.div>
+          )}
+
+          {isError && (
+            <motion.div
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="flex gap-2.5"
+            >
+              <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-rose-400/30 bg-rose-500/15 text-rose-200">
+                <Bot className="h-3.5 w-3.5" />
+              </div>
+              <div className="max-w-[80%] rounded-2xl border border-rose-400/30 bg-rose-500/[0.06] px-3 py-2 text-[13px] leading-relaxed text-rose-200">
+                Agent unavailable. Please try again.
+              </div>
+            </motion.div>
+          )}
         </div>
 
         <div className="border-t border-white/[0.06] p-3">
@@ -531,16 +590,17 @@ export default function ConfigPlaygroundTab() {
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 placeholder="Message research-agent…"
-                className="w-full bg-transparent text-[13.5px] text-ink-100 placeholder:text-ink-400 focus:outline-none"
+                disabled={loading || isHealing}
+                className="w-full bg-transparent text-[13.5px] text-ink-100 placeholder:text-ink-400 focus:outline-none disabled:opacity-50"
               />
             </div>
             <Button
               type="submit"
               glow
-              disabled={isHealing}
+              disabled={isHealing || loading}
               className="h-10"
             >
-              {isHealing ? (
+              {isHealing || loading ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
               ) : (
                 <Send className="h-3.5 w-3.5" />
